@@ -1,0 +1,57 @@
+[
+    {
+        "course_id": "CS-GY 6003",
+        "name": "Foundations of Artificial Intelligence",
+        "instructor": "Yann LeCun",
+        "school": "Tandon School of Engineering",
+        "term": "Spring 2026",
+        "description": "An introduction to the fundamental concepts of Artificial Intelligence, including search algorithms, game playing, constraint satisfaction, and machine learning basics.",
+        "schedule": "Mon 2:00PM - 4:30PM",
+        "units": "3.0",
+        "instruction_mode": "In-Person"
+    },
+    {
+        "course_id": "CS-GY 6083",
+        "name": "Principles of Database Systems",
+        "instructor": "Ying Lu",
+        "school": "Tandon School of Engineering",
+        "term": "Spring 2026",
+        "description": "Broad overview of database systems, including relational models, SQL, transaction management, and concurrency control.",
+        "schedule": "Tue 11:00AM - 1:30PM",
+        "units": "3.0",
+        "instruction_mode": "In-Person"
+    },
+    {
+        "course_id": "CS-GY 9223",
+        "name": "Deep Learning",
+        "instructor": "Alfredo Canziani",
+        "school": "Tandon School of Engineering",
+        "term": "Spring 2026",
+        "description": "Advanced topics in deep neural networks, including CNNs, RNNs, Transformers, and their applications in computer vision and NLP.",
+        "schedule": "Wed 6:00PM - 8:30PM",
+        "units": "3.0",
+        "instruction_mode": "In-Person"
+    },
+    {
+        "course_id": "CS-GY 6613",
+        "name": "Artificial Intelligence I",
+        "instructor": "Pantelis Monogioudis",
+        "school": "Tandon School of Engineering",
+        "term": "Spring 2026",
+        "description": "Study of AI agents, problem solving by searching, logic and inference, planning, and uncertainty.",
+        "schedule": "Thu 4:00PM - 6:30PM",
+        "units": "3.0",
+        "instruction_mode": "Hybrid"
+    },
+    {
+        "course_id": "CS-GY 6923",
+        "name": "Machine Learning",
+        "instructor": "Anna Choromanska",
+        "school": "Tandon School of Engineering",
+        "term": "Spring 2026",
+        "description": "This course covers the principles of machine learning, including supervised and unsupervised learning, classification, regression, and clustering.",
+        "schedule": "Fri 10:00AM - 12:30PM",
+        "units": "3.0",
+        "instruction_mode": "In-Person"
+    }
+]
