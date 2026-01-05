@@ -40,7 +40,8 @@ class DocumentProcessor:
                 "instructor": course.instructor,
                 "school": course.school,
                 "units": course.units,
-                "rating": course.rmp_rating if course.rmp_rating else 0.0
+                "rating": course.rmp_rating if course.rmp_rating else 0.0,
+                "rmp_summary": course.rmp_summary if course.rmp_summary else "N/A"
             })
             
             ids.append(course.course_id)

@@ -111,10 +111,13 @@ def extract_json_from_text(text):
 
 def get_generative_model(api_key):
     genai.configure(api_key=api_key)
-    for model in ['gemini-1.5-flash', 'gemini-2.0-flash-lite']:
+    # gemini-1.5-flash was not found in the available models list.
+    # Using gemini-2.0-flash-lite as it is available and cost-effective.
+    for model in ['gemini-2.0-flash-lite', 'gemini-flash-latest']:
         try:
             m = genai.GenerativeModel(model)
-            m.generate_content("Test")
+            # Quick check to ensure model works (optional, can be removed if quota is tight)
+            # m.generate_content("Test") 
             return m
         except: continue
     return genai.GenerativeModel('gemini-2.0-flash-lite')
@@ -171,23 +174,43 @@ def analyze_course_with_tavily(course_info, user_query, user_profile, req_contex
         review_result = tavily.search(query=review_query, search_depth="advanced", max_results=4)
         results.extend(review_result['results'])
         
-        # Deduplicate by URL
-        seen_urls = set()
-        unique_results = []
-        for r in results:
-            if r['url'] not in seen_urls:
-                unique_results.append(r)
-                seen_urls.add(r['url'])
+        # 3. Extract RMP Stats (Lightweight Logic)
+        rmp_rating = "N/A"
+        rmp_summary = "No specific RMP summary found."
         
+        # Try to find rating in RMP results
+        for r in results:
+            if "Rate My Professors" in r.get('title', '') or "ratemyprofessors.com" in r.get('url', ''):
+                # Look for "X.X" or "Rating: X.X"
+                match = re.search(r'(\d\.\d)/5', r['content'])
+                if match:
+                    rmp_rating = match.group(1)
+                    rmp_summary = r['content'][:300] + "..." # Use snippet as summary
+                    break
+                
+                # Fallback: Look for just a float like 3.5
+                match_loose = re.search(r'\b([1-5]\.\d)\b', r['content'])
+                if match_loose:
+                    rmp_rating = match_loose.group(1)
+                    rmp_summary = r['content'][:300] + "..."
+                    break
+
         context = "\n".join([f"- Content: {r['content']}\n  Source: {r['url']}" for r in unique_results])
         
         model = get_generative_model(os.getenv("GOOGLE_API_KEY"))
         
         summary_prompt = f"""
-        Role: "CourseMate" (Helpful AI, Mixed En/Ch, "You/你").
-        Task: Analyze course based on Profile, Requirements, and Reviews.
+        You are an expert academic advisor. 
+        Analyze the course based on the following REAL data:
         
-        [Course] {course_info['code']} - {prof_name} (Time: {course_info.get('time', 'N/A')})
+        Course: {course_info['code']}
+        Professor: {prof_name}
+        
+        --- REAL RMP DATA ---
+        Rating: {rmp_rating}/5
+        Student Summary: {rmp_summary}
+        ---------------------
+        
         [Profile] School: {user_profile.get('school')}, Major: {user_profile.get('major')}, Goal: {user_profile.get('goal')}
         [Requirements] {req_context}
         [Reviews & Data] 
@@ -195,9 +218,9 @@ def analyze_course_with_tavily(course_info, user_query, user_profile, req_contex
         
         [Output - Markdown]
         ### 📊 Quick Stats (Professor: {prof_name})
-        *   **RMP Rating**: [Extract X.X/5] (Source: [Link]) or "N/A"
-        *   **Would Take Again**: [Extract %] or "N/A"
-        *   **Difficulty**: [Extract X.X/5] or "N/A"
+        *   **RMP Rating**: {rmp_rating}/5 (Source: RateMyProfessors)
+        *   **Would Take Again**: [Extract % from Reviews] or "N/A"
+        *   **Difficulty**: [Extract X.X/5 from Reviews] or "N/A"
         *   **Graduation**: [Core/Elective based on Requirements]
         *   **Workload**: [High/Medium/Low]
         *   **Grading**: [Tough/Fair/Easy]
