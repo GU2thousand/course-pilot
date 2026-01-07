@@ -11,7 +11,7 @@ class CourseAdvisor:
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         
         # Try models in order of preference
-        models_to_try = ['gemini-1.5-flash', 'gemini-2.0-flash-lite']
+        models_to_try = ['gemini-2.0-flash-lite', 'gemini-flash-latest']
         self.model = None
         for model_name in models_to_try:
             try:

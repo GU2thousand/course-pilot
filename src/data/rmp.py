@@ -50,7 +50,7 @@ class RMPAggregator:
         
         # 不要用 gemini-2.0-flash-lite，它对免费用户限制极严
         # 推荐使用 gemini-1.5-flash 或者 gemini-2.0-flash
-        self.model_name = 'gemini-1.5-flash' 
+        self.model_name = 'gemini-2.0-flash-lite' 
         self.model = genai.GenerativeModel(self.model_name)
         print(f"✅ 使用全新 Key 启动，模型锁定为: {self.model_name}")
         
