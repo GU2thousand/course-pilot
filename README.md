@@ -19,6 +19,7 @@ Course Pilot is an AI-powered course planning assistant that goes beyond simple 
 *   **💎 Premium UI**: A modern, glassmorphism-inspired interface built with Streamlit.
 *   **🔧 Robust & Resilient**: Auto-corrects typos (e.g., "Linda Selie" -> "Linda Sellie") and handles missing data gracefully.
 
+
 ## 🛠️ Tech Stack
 
 *   **Core**: Python 3.9+
