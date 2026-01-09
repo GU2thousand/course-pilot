@@ -137,14 +137,20 @@ def parse_raw_text_with_gemini(text, api_key):
         # st.toast(f"Using Model: {model.model_name}", icon="🤖")
         
         prompt = """
+        You are a strict data extraction assistant.
         Extract course info from this text.
-        Output JSON list: [{"code": "...", "name": "...", "professor": "...", "time": "..."}]
+        
+        Output JSON list: [{"code": "...", "name": "...", "professor": "..."}]
+        
         Rules:
-        1. If professor is missing/Staff, use "TBD".
-        2. Extract Time if available (e.g., "Mon 2:00PM", "TBD").
-        3. Merge sections.
-        4. **Auto-correct typos**: Fix professor names (e.g. "Linda Selie" -> "Linda Sellie") and course names.
-        5. **Standardize Codes**: Use full format (e.g. "CS6033" -> "CS-GY 6033").
+        1. **Professor Name**: Look for "Instructor:", "Prof.", or names after the course title. 
+           - IGNORE locations (e.g. "Jacobs Building", "Room 101").
+           - IGNORE times (e.g. "Mon 2:00PM").
+           - If not found, use "TBD".
+        2. **Course Code**: Standardize to full format (e.g. "CS-GY 6033").
+        3. **Course Name**: Full title.
+        4. **Auto-correct**: Fix obvious typos in names (e.g. "Linda Selie" -> "Linda Sellie").
+        
         Text:
         """ + text[:50000] # Reduced limit to be safe
         
@@ -165,12 +171,13 @@ def fetch_degree_requirements(school, major, api_key):
 
 from src.engine.judge import JudgeAgent
 
-def analyze_course_with_tavily(course_info, user_query, user_profile, req_context, tavily_api_key, google_api_key):
+def analyze_course_with_tavily(course_info, user_query, user_profile, req_context, tavily_api_key, google_api_key, status_container=None):
     try:
         tavily = TavilyClient(api_key=tavily_api_key)
         prof_name = clean_professor_name(course_info['professor'])
         
         # --- 1. Data Gathering (Agent A) ---
+        if status_container: status_container.write(f"🌐 Searching RMP & Reddit for **{prof_name}**...")
         results = []
         
         # RMP Search
@@ -200,91 +207,106 @@ def analyze_course_with_tavily(course_info, user_query, user_profile, req_contex
         # Filter content for the Judge (focus on RMP-like content)
         rmp_content = "\n".join([r['content'] for r in unique_results if "Rate My Professors" in r.get('title', '') or "ratemyprofessors" in r.get('url', '')])
         
+        if status_container: status_container.write("⚖️ Judge Agent verifying data...")
         judge = JudgeAgent(google_api_key)
         verified_data = judge.extract_rmp_data(rmp_content)
         
         # --- 3. Final Analysis (Tiered Fallback) ---
+        if status_container: status_container.write(f"🧠 Generating advice for **{user_profile.get('goal')}**...")
         context = "\n".join([f"- Content: {r['content']}\n  Source: {r['url']}" for r in unique_results])
         
-        # Configure model for JSON output
-        model = genai.GenerativeModel('gemini-2.0-flash-lite', generation_config={"response_mime_type": "application/json"})
+        # --- System Instruction (Strategic Advisor Persona) ---
+        system_instruction = """
+        # ROLE
+        You are a sharp, pragmatic, and critically-minded academic advising agent for NYU Tandon students.
+        Your job is NOT to praise courses; your job is to help students make informed trade-offs and optimize outcomes.
+
+        # CORE MISSION
+        You must help students navigate:
+        1. course content alignment
+        2. workload and GPA risks
+        3. internship/job-seeking constraints
+        4. opportunity cost (e.g., LeetCode vs side projects vs coursework)
+        5. credit and graduation planning
+
+        # CORE PRINCIPLES
+        1. **No Generic Advice**: Reject "study hard". Give specific strategy.
+        2. **Evidence-Based**: All claims must be backed by data (RMP, Reddit).
+        3. **Contradiction Audit**: Surface contradictions (e.g. Rating < 3.0 but "Easy A").
+        4. **Opportunity Cost**: Explicitly model trade-offs (Job Search vs Coursework).
+        5. **Transparency**: Reveal sources.
+        6. **No Hallucination**: If data is sparse, say "Data Sparse".
+
+        # DECISION STYLE
+        Do NOT output "good course" / "bad course".
+        Output must reflect: "good for whom + under what conditions + why".
+        """
+
+        # Configure model with System Instruction
+        model = genai.GenerativeModel(
+            'gemini-2.0-flash-lite', 
+            generation_config={"response_mime_type": "application/json"},
+            system_instruction=system_instruction
+        )
         
         # --- Goal-Driven Logic ---
         user_goal = user_profile.get('goal', 'General')
-        goal_instruction = ""
         
-        if "Job" in user_goal or "Career" in user_goal:
-            goal_instruction = """
-            [Analysis Focus: JOB SEEKING]
-            - Highlight skills relevant to industry interviews (e.g. System Design, LeetCode patterns).
-            - Does this course have projects suitable for a resume?
-            - If the course is too theoretical with no practical application, warn the user.
-            """
-        elif "Research" in user_goal or "PhD" in user_goal:
-            goal_instruction = """
-            [Analysis Focus: RESEARCH/PhD]
-            - Focus on the professor's lab and publication reputation.
-            - Is the content rigorous enough for research prep?
-            - Ignore "workload is heavy" complaints if the depth is worth it.
-            """
-        elif "Easy" in user_goal or "Booster" in user_goal:
-            goal_instruction = """
-            [Analysis Focus: GPA BOOSTER]
-            - CRITICAL: Check grading distribution and workload hours.
-            - If the course is "useful but hard", mark it as CAUTION for this user.
-            - Highlight "easy A" aspects.
-            """
-        else:
-            goal_instruction = """
-            [Analysis Focus: GENERAL]
-            - Balance practical skills with academic depth.
-            - Highlight any red flags regarding organization or teaching quality.
-            """
-
         summary_prompt = f"""
-        You are an expert academic advisor.
+        # User Context
+        - Mission Goal: {user_goal}
+        - Course: {course_info['code']} - {prof_name}
+        - RMP Data: Rating {verified_data['rmp_rating']}, Difficulty {verified_data['difficulty']}
+        - Reviews: {context}
+        - Requirements: {req_context}
+
+        # Task
+        Perform a strategic analysis based on the user's goal.
         
-        Task: Analyze the course and provide a structured JSON report.
+        1. **Classify Persona**: Based on Mission Goal ({user_goal}), classify user as:
+           - "Job Seeking" (prioritize interview prep, resume)
+           - "Research Oriented" (prioritize theory, lab)
+           - "GPA Farming" (minimize workload)
+           - "Undecided" (exploratory)
         
-        {goal_instruction}
+        2. **Deep Dive**: Extract specific details (Workload hours, Exam type, Languages).
         
-        [Real Data from Judge (RMP)]
-        Has Data: {verified_data['has_data']}
-        RMP Rating: {verified_data['rmp_rating']}
-        Difficulty: {verified_data['difficulty']}
-        Summary: {verified_data['summary']}
+        3. **Contradiction Audit**: Check if Rating matches Reviews.
         
-        [Context & Reviews]
-        Course: {course_info['code']} - {prof_name}
-        Profile: {user_profile.get('school')}, {user_profile.get('major')}, Goal: {user_profile.get('goal')}
-        Requirements: {req_context}
-        Reviews: {context}
+        4. **Opportunity Cost**: Analyze trade-offs. Does this course kill interview prep time?
         
-        [Fallback Logic]
-        1. **Level 1 (RMP)**: If 'Has Data' is True, use Judge data. Set 'data_source' = "RMP Verified".
-        2. **Level 2 (Reddit)**: If 'Has Data' is False, look for Reddit/Forum reviews in [Context]. If found, extract sentiment. Set 'data_source' = "Reddit Consensus".
-        3. **Level 3 (AI)**: If no data found, estimate based on your knowledge of the course/professor. Set 'data_source' = "AI Estimate".
+        5. **Strategic Planning**: Where does this fit in a 4-semester plan?
         
         Output JSON Schema:
         {{
             "data_source": "RMP Verified" | "Reddit Consensus" | "AI Estimate",
-            "quick_stats": {{
-                "rating": float | null,
-                "difficulty": float | null,
-                "workload": "High" | "Medium" | "Low",
-                "grading": "Tough" | "Fair" | "Easy"
-            }},
-            "verdict": {{
-                "status": "Recommended" | "Caution" | "Avoid",
-                "reason": "string (Mix En/Ch)",
-                "badge_color": "green" | "yellow" | "red"
-            }},
+            "persona_classification": "Job Seeking" | "Research Oriented" | "GPA Farming" | "Undecided",
             "deep_dive": {{
-                "workload_details": "string (with inline citations)",
-                "professor_vibe": "string (with inline citations)",
-                "forum_chatter": "string (with inline citations)"
+                "workload": "string (Hours/week, intensity)",
+                "grading": "string (Curve, strictness, distribution)",
+                "teaching": "string (Style, clarity, engagement)",
+                "exams": "string (Format, difficulty, open/closed book)",
+                "projects": "string (Individual/Group, Languages, Resume value)",
+                "industry_relevance": "string (Skills, Real-world alignment)"
             }},
-            "heads_up": ["string (actionable advice)"]
+            "contradiction_audit": {{
+                "flag": boolean,
+                "details": "string (Explain any mismatch found)"
+            }},
+            "suitability": {{
+                "best_for": ["string", "string"],
+                "not_for": ["string", "string"],
+                "risk_factors": ["string", "string"]
+            }},
+            "strategic_planning": {{
+                "roadmap_context": "string (e.g. 'Take in Sem 2 after Python')",
+                "credit_advice": "string (e.g. 'Pair with a light elective')",
+                "alternatives": ["string (Similar courses)"]
+            }},
+            "opportunity_cost": {{
+                "trade_offs": "string (e.g. 'High workload reduces LeetCode time')",
+                "warning": "string (Critical warning if applicable)"
+            }}
         }}
         """
         response = model.generate_content(summary_prompt)
@@ -405,6 +427,41 @@ else:
         if raw_text:
             with st.spinner("🤖 Decoding messy text..."):
                 parsed = parse_raw_text_with_gemini(raw_text, google_api_key)
+                
+                # --- Web-Augmented Parsing (Self-Correction) ---
+                if parsed and tavily_api_key:
+                    try:
+                        tavily = TavilyClient(api_key=tavily_api_key)
+                        for course in parsed:
+                            # If info is missing, search the web
+                            if course['professor'] == "TBD" or course['professor'] == "Staff" or len(course['name']) < 5:
+                                st.toast(f"🌍 Searching web for {course['code']}...", icon="🔍")
+                                q = f"NYU Tandon {course['code']} official course catalog syllabus instructor"
+                                res = tavily.search(q, max_results=2)
+                                context = "\n".join([r['content'] for r in res['results']])
+                                
+                                # Quick Re-Parse using Gemini
+                                fix_model = get_generative_model(google_api_key)
+                                fix_prompt = f"""
+                                Based on this search result, find the Professor and Course Name for {course['code']}.
+                                If multiple professors, pick the most recent one.
+                                Output JSON: {{ "name": "...", "professor": "..." }}
+                                Context: {context}
+                                """
+                                fix_resp = fix_model.generate_content(fix_prompt)
+                                fixed_data = extract_json_from_text(fix_resp.text)
+                                
+                                if fixed_data:
+                                    if isinstance(fixed_data, list) and len(fixed_data) > 0: fixed_data = fixed_data[0]
+                                    if isinstance(fixed_data, dict):
+                                        course['name'] = fixed_data.get('name', course['name'])
+                                        prof = fixed_data.get('professor', 'TBD')
+                                        if prof and prof != "TBD":
+                                            course['professor'] = prof
+                                            st.toast(f"✅ Fixed: {prof}", icon="✨")
+                    except Exception as e:
+                        print(f"Web Augmentation Failed: {e}")
+
                 if parsed:
                     st.session_state['courses'] = parsed
                     st.success(f"✅ Found {len(parsed)} courses!")
@@ -420,7 +477,11 @@ else:
         
         # Table
         df = pd.DataFrame(st.session_state['courses'])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(
+            df[['code', 'name', 'professor']].rename(columns={"code": "Course", "name": "Name", "professor": "Professor"}), 
+            use_container_width=True, 
+            hide_index=True
+        )
         
         course_options = [f"{c['code']} | {c['professor']}" for c in st.session_state['courses']]
         selected = st.multiselect("Select Courses (可多选):", course_options)
@@ -458,7 +519,7 @@ else:
                         course_obj = st.session_state['courses'][idx]
                         
                         with st.status(f"🕵️ Analyzing {course_obj['code']}...", expanded=True) as status:
-                            result_json = analyze_course_with_tavily(course_obj, user_req, st.session_state['user_profile'], st.session_state['req_context'], tavily_api_key, google_api_key)
+                            result_json = analyze_course_with_tavily(course_obj, user_req, st.session_state['user_profile'], st.session_state['req_context'], tavily_api_key, google_api_key, status_container=status)
                             status.update(label=f"✅ {course_obj['code']} Ready", state="complete", expanded=False)
                         
                         try:
@@ -466,6 +527,7 @@ else:
                             if "error" in data:
                                 st.error(f"Analysis Error: {data['error']}")
                             else:
+                                # --- Render Structured UI ---
                                 # --- Render Structured UI ---
                                 source_badge = data.get('data_source', 'Unknown')
                                 source_color = "#48bb78" if "RMP" in source_badge else "#ecc94b" if "Reddit" in source_badge else "#a0aec0"
@@ -478,35 +540,55 @@ else:
                                     </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # 1. Quick Stats Row
-                                qs = data.get("quick_stats", {})
-                                c1, c2, c3, c4 = st.columns(4)
-                                with c1: st.metric("RMP Rating", f"{qs.get('rating') or 'N/A'}/5")
-                                with c2: st.metric("Difficulty", f"{qs.get('difficulty') or 'N/A'}/5")
-                                with c3: st.metric("Workload", qs.get('workload', 'N/A'))
-                                with c4: st.metric("Grading", qs.get('grading', 'N/A'))
+                                # 1. Suitability & Risks
+                                suit = data.get("suitability", {})
+                                if suit:
+                                    c1, c2, c3 = st.columns(3)
+                                    with c1:
+                                        st.markdown("**✅ Best For**")
+                                        for i in suit.get('best_for', []): st.markdown(f"- {i}")
+                                    with c2:
+                                        st.markdown("**❌ Not For**")
+                                        for i in suit.get('not_for', []): st.markdown(f"- {i}")
+                                    with c3:
+                                        st.markdown("**⚠️ Risks**")
+                                        for i in suit.get('risk_factors', []): st.markdown(f"- {i}")
+                                    st.divider()
+
+                                # 2. Strategic Context & Opportunity Cost
+                                strat = data.get("strategic_planning", {})
+                                opp = data.get("opportunity_cost", {})
                                 
-                                # 2. Verdict Badge
-                                v = data.get("verdict", {})
-                                color_map = {"green": "#48bb78", "yellow": "#ecc94b", "red": "#f56565"}
-                                badge_color = color_map.get(v.get("badge_color"), "#a0aec0")
-                                st.markdown(f"""
-                                <div style="background-color: {badge_color}; padding: 15px; border-radius: 10px; color: white; margin: 15px 0;">
-                                    <h4 style="margin:0;">💡 Verdict: {v.get('status')}</h4>
-                                    <p style="margin:5px 0 0 0;">{v.get('reason')}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
+                                if strat or opp:
+                                    st.markdown("#### 🧭 Strategic Context")
+                                    sc1, sc2 = st.columns(2)
+                                    with sc1:
+                                        st.info(f"**Roadmap**: {strat.get('roadmap_context', 'N/A')}")
+                                        st.caption(f"💡 {strat.get('credit_advice', '')}")
+                                    with sc2:
+                                        st.warning(f"**📉 Opportunity Cost**: {opp.get('trade_offs', 'N/A')}")
+                                        if opp.get('warning'):
+                                            st.error(f"🚨 {opp.get('warning')}")
+
                                 # 3. Deep Dive
-                                dd = data.get("deep_dive", {})
-                                with st.expander("📝 Deep Dive (Workload & Vibe)", expanded=True):
-                                    st.markdown(f"**Workload & Grading**:\n{dd.get('workload_details')}")
-                                    st.markdown(f"**Professor Vibe**:\n{dd.get('professor_vibe')}")
-                                    st.markdown(f"**Forum Chatter**:\n{dd.get('forum_chatter')}")
-                                
-                                # 4. Heads Up
-                                if data.get("heads_up"):
-                                    st.warning("⚠️ **Heads Up:**\n" + "\n".join([f"- {h}" for h in data['heads_up']]))
+                                with st.expander("🧐 Deep Dive (深度测评)", expanded=True):
+                                    dd = data.get("deep_dive", {})
+                                    
+                                    # Details Grid
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        st.markdown(f"**📚 Workload**: {dd.get('workload', 'N/A')}")
+                                        st.markdown(f"**⚖️ Grading**: {dd.get('grading', 'N/A')}")
+                                        st.markdown(f"**🎓 Teaching**: {dd.get('teaching', 'N/A')}")
+                                    with c2:
+                                        st.markdown(f"**📝 Exams**: {dd.get('exams', 'N/A')}")
+                                        st.markdown(f"**💻 Projects**: {dd.get('projects', 'N/A')}")
+                                        st.markdown(f"**💼 Industry**: {dd.get('industry_relevance', 'N/A')}")
+
+                                # 4. Contradiction Audit
+                                audit = data.get("contradiction_audit", {})
+                                if audit.get("flag"):
+                                    st.error(f"🕵️ **Logic Audit**: {audit.get('details')}")
                                 
                                 st.markdown("</div>", unsafe_allow_html=True)
 
